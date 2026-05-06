@@ -1033,7 +1033,7 @@ class TektiteVideoCombiner10:
         normalized_dir = tempfile.mkdtemp(prefix="tektite_norm_")
         normalized_paths: List[str] = []
         try:
-            target_width, target_height = self._probe_video_size(ordered_paths[0])
+            target_width, target_height = 1280, 720
             print(
                 f"[Tektite Video Combiner 10.0] Normalizing all clips to "
                 f"{target_width}x{target_height} at {float(target_fps):.2f} fps"
