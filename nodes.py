@@ -1033,13 +1033,21 @@ class TektiteVideoCombiner10:
         normalized_dir = tempfile.mkdtemp(prefix="tektite_norm_")
         normalized_paths: List[str] = []
         try:
-            # Stage 1: normalize each clip to stable CFR intermediates first.
+            target_width, target_height = self._probe_video_size(ordered_paths[0])
+            print(
+                f"[Tektite Video Combiner 10.0] Normalizing all clips to "
+                f"{target_width}x{target_height} at {float(target_fps):.2f} fps"
+            )
+
+            # Stage 1: normalize each clip to one frame clock, codec, pixel format, and canvas size.
             for idx, source in enumerate(ordered_paths):
                 norm_path = os.path.join(normalized_dir, f"norm_{idx:05d}.mp4")
                 self._normalize_clip_for_concat(
                     source_path=source,
                     out_path=norm_path,
                     target_fps=target_fps,
+                    target_width=target_width,
+                    target_height=target_height,
                     overwrite=overwrite,
                     video_codec=video_codec,
                     preset=preset,
@@ -1123,6 +1131,8 @@ class TektiteVideoCombiner10:
         source_path: str,
         out_path: str,
         target_fps: float,
+        target_width: int,
+        target_height: int,
         overwrite: bool,
         video_codec: str,
         preset: str,
@@ -1134,6 +1144,13 @@ class TektiteVideoCombiner10:
 
         overwrite_flag = "-y" if overwrite else "-n"
         gop = max(1, int(round(float(target_fps) * 2.0)))
+        vf = (
+            f"setpts=N/({float(target_fps)}*TB),"
+            f"scale={int(target_width)}:{int(target_height)}:"
+            "force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            f"pad={int(target_width)}:{int(target_height)}:(ow-iw)/2:(oh-ih)/2,"
+            "setsar=1,format=yuv420p"
+        )
         cmd = [
             ffmpeg_path,
             overwrite_flag,
@@ -1145,7 +1162,7 @@ class TektiteVideoCombiner10:
             "0:v:0",
             "-an",
             "-vf",
-            f"setpts=N/({float(target_fps)}*TB),format=yuv420p",
+            vf,
             "-fps_mode",
             "passthrough",
             "-c:v",
@@ -1170,6 +1187,38 @@ class TektiteVideoCombiner10:
                 f"Source: {source_path}\n"
                 f"{res.stderr.strip()}"
             )
+
+    def _probe_video_size(self, path: str) -> Tuple[int, int]:
+        ffprobe_path = shutil.which("ffprobe")
+        if not ffprobe_path:
+            raise RuntimeError("ffprobe not found in PATH. Install ffprobe to inspect clip resolution.")
+
+        cmd = [
+            ffprobe_path,
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=s=x:p=0",
+            path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffprobe failed while reading clip size: {path}\n{result.stderr.strip()}")
+
+        raw = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+        match = re.match(r"^(\d+)x(\d+)$", raw)
+        if not match:
+            raise RuntimeError(f"ffprobe returned an invalid clip size for {path}: {raw!r}")
+
+        width = max(2, int(match.group(1)))
+        height = max(2, int(match.group(2)))
+        width -= width % 2
+        height -= height % 2
+        return width, height
 
     def _mux_audio_track(self, *, video_path: str, audio: Any, overwrite: bool) -> str:
         ffmpeg_path = shutil.which("ffmpeg")
